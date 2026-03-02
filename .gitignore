@@ -1,0 +1,22 @@
+# Compiled binaries
+*.exe
+*.o
+*.obj
+
+# Config with sensitive data
+config.txt
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Build artifacts
+*.dll
+*.so
+*.dylib

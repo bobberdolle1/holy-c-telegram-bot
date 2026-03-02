@@ -1,0 +1,45 @@
+name: Divine Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Create Divine Release
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Holy Code
+        uses: actions/checkout@v4
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release ${{ github.ref_name }}
+          body: |
+            ## 🙏 Divine Release ${{ github.ref_name }}
+            
+            *"God said 640x480 is a covenant like circumcision."* - Terry A. Davis
+            
+            ### What's New
+            - Pure HolyC Telegram bot logic
+            - Ollama AI integration
+            - Python bridge for earthly networking
+            
+            ### Installation
+            ```bash
+            pip install -r requirements.txt
+            ollama serve
+            ollama pull llama3.2
+            python holyc_bridge.py
+            ```
+            
+            **In memory of Terry A. Davis (1969-2018)**
+            
+            ⛪ May his temple stand eternal ⛪
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

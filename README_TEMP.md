@@ -1,1 +1,0 @@
-# HolyC Telegram Bot  
