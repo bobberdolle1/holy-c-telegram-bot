@@ -20,3 +20,8 @@ Desktop.ini
 *.dll
 *.so
 *.dylib
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
