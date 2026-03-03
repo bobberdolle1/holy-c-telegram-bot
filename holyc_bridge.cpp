@@ -26,7 +26,7 @@ using namespace std;
 atomic<bool> running(true);
 string BOT_TOKEN;
 string OLLAMA_MODEL;
-string OLLAMA_VISION_MODEL = "llama3.2-vision";
+string OLLAMA_VISION_MODEL = "qwen3-vl:235b-cloud";
 string OLLAMA_WHISPER_MODEL = "whisper";
 string PERSONALITY_PROMPT;
 long long ADMIN_ID = 0;
