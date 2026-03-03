@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  holyc-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: terrystemple_bot
+    restart: unless-stopped
+    
+    # Use host network to access Ollama on Windows host
+    network_mode: "host"
+    
+    volumes:
+      # Persistent database
+      - ./data:/app/data
+      # Config file (read-only)
+      - ./config.txt:/app/config.txt:ro
+      - ./personality.txt:/app/personality.txt:ro
+    
+    environment:
+      # Ollama runs on host Windows at localhost:11434
+      - OLLAMA_HOST=http://localhost:11434
+    
+    # Resource limits (optional)
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 128M
+    
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# No networks needed - using host network to access Ollama

@@ -1,0 +1,40 @@
+# Git
+.git
+.gitignore
+.gitattributes
+.github
+
+# Documentation
+README.md
+ARCHITECTURE.md
+STATS.md
+HOLYC_MODULES.txt
+TELEGRAM_COMMANDS.txt
+LICENSE
+
+# Build artifacts
+*.exe
+*.o
+*.obj
+memory.db
+memory.db-journal
+
+# Python files (not needed for C++ bridge)
+holyc_bridge.py
+requirements.txt
+__pycache__
+*.pyc
+
+# Windows batch files
+*.bat
+
+# Config examples
+config.txt.example
+
+# Data directory
+data/
+
+# Docker files
+Dockerfile
+docker-compose.yml
+.dockerignore

@@ -1,4 +1,3 @@
-#define CPPHTTPLIB_OPENSSL_SUPPORT
 #include <iostream>
 #include <string>
 #include <fstream>
@@ -10,12 +9,16 @@
 #include <cstdlib>
 #include <map>
 #include <algorithm>
-#include <windows.h>
-#include <wininet.h>
 #include <sqlite3.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <wininet.h>
 #pragma comment(lib, "wininet.lib")
 #pragma comment(lib, "sqlite3.lib")
+#else
+#include <curl/curl.h>
+#endif
 
 using namespace std;
 
@@ -101,7 +104,8 @@ inline string json_escape(const string& input) {
     return output;
 }
 
-// Fast HTTP client using WinINet
+#ifdef _WIN32
+// Windows HTTP client using WinINet
 string http_request(const string& url, const string& post_data = "", bool is_https = true) {
     HINTERNET hInternet = InternetOpenA("HolyCBridge/2.0", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
     if (!hInternet) return "";
@@ -131,6 +135,39 @@ string http_request(const string& url, const string& post_data = "", bool is_htt
     InternetCloseHandle(hInternet);
     return result;
 }
+#else
+// Linux HTTP client using libcurl
+static size_t holyc_curl_write(void* contents, size_t size, size_t nmemb, string* userp) {
+    userp->append((char*)contents, size * nmemb);
+    return size * nmemb;
+}
+
+string http_request(const string& url, const string& post_data = "", bool is_https = true) {
+    CURL* curl = curl_easy_init();
+    if (!curl) return "";
+    
+    string response;
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, holyc_curl_write);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    
+    if (!post_data.empty()) {
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_data.c_str());
+        struct curl_slist* headers = NULL;
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        curl_easy_perform(curl);
+        curl_slist_free_all(headers);
+    } else {
+        curl_easy_perform(curl);
+    }
+    
+    curl_easy_cleanup(curl);
+    return response;
+}
+#endif
 
 // Fast JSON extraction (optimized for known structure)
 inline long long extract_json_int(const string& json, const string& key) {
@@ -372,13 +409,17 @@ public:
         string escaped_msg = json_escape(user_message);
         string escaped_personality = json_escape(PERSONALITY_PROMPT);
         
+        // Get Ollama host from environment or use default
+        const char* ollama_host_env = getenv("OLLAMA_HOST");
+        string ollama_host = ollama_host_env ? ollama_host_env : "http://localhost:11434";
+        
         string json_request = "{\"model\":\"" + ollama_model + 
                             "\",\"messages\":[" +
                             "{\"role\":\"system\",\"content\":\"" + escaped_personality + "\"}," +
                             "{\"role\":\"user\",\"content\":\"" + escaped_msg + "\"}" +
                             "],\"stream\":false}";
         
-        string response = http_request("http://localhost:11434/api/chat", json_request, false);
+        string response = http_request(ollama_host + "/api/chat", json_request, false);
         
         if (response.empty()) return "";
         
@@ -390,7 +431,6 @@ public:
         while (end_pos < response.length() && 
                (response[end_pos] != '"' || response[end_pos-1] == '\\')) {
             end_pos++;
-        }
         }
         
         string content = response.substr(content_pos, end_pos - content_pos);
@@ -736,11 +776,19 @@ bool LoadConfig(string& bot_token, string& ollama_model, string& personality, lo
 int main() {
     srand(time(NULL));
     
+    #ifdef _WIN32
     cout << "========================================" << endl;
     cout << "  HOLY C TELEGRAM BOT" << endl;
-    cout << "  Runtime: C++ Bridge (MAXIMUM SPEED)" << endl;
+    cout << "  Runtime: C++ Bridge (WINDOWS)" << endl;
     cout << "  In Memory of Terry A. Davis" << endl;
     cout << "========================================\n" << endl;
+    #else
+    cout << "========================================" << endl;
+    cout << "  HOLY C TELEGRAM BOT" << endl;
+    cout << "  Runtime: C++ Bridge (LINUX/DOCKER)" << endl;
+    cout << "  In Memory of Terry A. Davis" << endl;
+    cout << "========================================\n" << endl;
+    #endif
     
     string bot_token, ollama_model;
     
@@ -759,6 +807,11 @@ int main() {
     
     cout << "[INFO] Bot token loaded" << endl;
     cout << "[INFO] Ollama model: " << ollama_model << endl;
+    
+    const char* ollama_host_env = getenv("OLLAMA_HOST");
+    string ollama_host = ollama_host_env ? ollama_host_env : "http://localhost:11434";
+    cout << "[INFO] Ollama host: " << ollama_host << endl;
+    
     cout << "[INFO] Loading HolyC logic from telegram_bot.HC" << endl;
     cout << "[INFO] Divine wisdom enabled (15% chance)" << endl;
     cout << "[INFO] Memory persistence enabled (SQLite)" << endl;
