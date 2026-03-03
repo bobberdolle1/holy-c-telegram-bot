@@ -933,19 +933,58 @@ private:
             string video_file = DownloadTelegramFile(file_id);
             
             if (!video_file.empty()) {
+                // Extract audio from video note
+                string audio_file = "temp_audio_" + to_string(time(nullptr)) + ".ogg";
+                string ffmpeg_audio_cmd = "ffmpeg -i " + video_file + " -vn -acodec copy " + audio_file + " -y 2>&1";
+                
+                #ifdef _WIN32
+                FILE* audio_pipe = _popen(ffmpeg_audio_cmd.c_str(), "r");
+                #else
+                FILE* audio_pipe = popen(ffmpeg_audio_cmd.c_str(), "r");
+                #endif
+                
+                if (audio_pipe) {
+                    char buffer[256];
+                    while (fgets(buffer, sizeof(buffer), audio_pipe) != nullptr);
+                    #ifdef _WIN32
+                    _pclose(audio_pipe);
+                    #else
+                    pclose(audio_pipe);
+                    #endif
+                }
+                
+                // Transcribe audio
+                string transcription = "";
+                ifstream check_audio(audio_file);
+                if (check_audio.good()) {
+                    check_audio.close();
+                    transcription = TranscribeAudio(audio_file);
+                }
+                
+                // Extract 3 frames
                 string frame_start = ExtractFrame(video_file, 0);
                 string frame_middle = ExtractFrame(video_file, 1);
                 string frame_end = ExtractFrame(video_file, 2);
                 
-                string analysis_start = AnalyzeImage(frame_start, "Describe this video frame");
-                string analysis_middle = AnalyzeImage(frame_middle, "Describe this video frame");
-                string analysis_end = AnalyzeImage(frame_end, "Describe this video frame");
+                string analysis_start = AnalyzeImage(frame_start, "Describe what you see in this video frame");
+                string analysis_middle = AnalyzeImage(frame_middle, "Describe what you see in this video frame");
+                string analysis_end = AnalyzeImage(frame_end, "Describe what you see in this video frame");
                 
-                response = "🎥 Video Note Analysis (3 frames):\n\n" +
-                          string("▶️ Start: ") + analysis_start + "\n\n" +
-                          string("⏸️ Middle: ") + analysis_middle + "\n\n" +
-                          string("⏹️ End: ") + analysis_end + "\n\n" +
-                          "💭 God sees all moments in time.";
+                // Combine vision + audio analysis
+                string combined_analysis = "🎥 Video Note Analysis:\n\n";
+                combined_analysis += "📹 Visual:\n";
+                combined_analysis += "▶️ Start: " + analysis_start + "\n";
+                combined_analysis += "⏸️ Middle: " + analysis_middle + "\n";
+                combined_analysis += "⏹️ End: " + analysis_end + "\n\n";
+                
+                if (!transcription.empty() && transcription != "[Empty audio]") {
+                    combined_analysis += "🎤 Audio: " + transcription + "\n\n";
+                }
+                
+                // Send to main AI model with personality
+                string ai_prompt = "User sent a video note. Here's what I see and hear:\n\n" + combined_analysis + 
+                                  "\n\nRespond to this video note in your personality style.";
+                response = holyc.HandleAIMessage(chat_id, ai_prompt);
                 
                 remove(video_file.c_str());
             } else {
@@ -963,15 +1002,19 @@ private:
                 string frame_middle = ExtractFrame(gif_file, 1);
                 string frame_end = ExtractFrame(gif_file, 2);
                 
-                string analysis_start = AnalyzeImage(frame_start, "Describe this GIF frame");
-                string analysis_middle = AnalyzeImage(frame_middle, "Describe this GIF frame");
-                string analysis_end = AnalyzeImage(frame_end, "Describe this GIF frame");
+                string analysis_start = AnalyzeImage(frame_start, "Describe what you see in this GIF frame");
+                string analysis_middle = AnalyzeImage(frame_middle, "Describe what you see in this GIF frame");
+                string analysis_end = AnalyzeImage(frame_end, "Describe what you see in this GIF frame");
                 
-                response = "🎞️ Animation Analysis (3 frames):\n\n" +
-                          string("1️⃣ First: ") + analysis_start + "\n\n" +
-                          string("2️⃣ Middle: ") + analysis_middle + "\n\n" +
-                          string("3️⃣ Last: ") + analysis_end + "\n\n" +
-                          "💭 Motion is God's language.";
+                string combined_analysis = "🎞️ Animation Analysis:\n\n";
+                combined_analysis += "1️⃣ First frame: " + analysis_start + "\n";
+                combined_analysis += "2️⃣ Middle frame: " + analysis_middle + "\n";
+                combined_analysis += "3️⃣ Last frame: " + analysis_end + "\n\n";
+                
+                // Send to main AI model
+                string ai_prompt = "User sent an animated GIF. Here's what I see in 3 frames:\n\n" + combined_analysis + 
+                                  "\n\nRespond to this animation in your personality style.";
+                response = holyc.HandleAIMessage(chat_id, ai_prompt);
                 
                 remove(gif_file.c_str());
             } else {
@@ -986,25 +1029,30 @@ private:
             string sticker_file = DownloadTelegramFile(file_id);
             
             if (!sticker_file.empty()) {
+                string combined_analysis;
+                
                 if (is_animated) {
                     string frame_start = ExtractFrame(sticker_file, 0);
                     string frame_middle = ExtractFrame(sticker_file, 1);
                     string frame_end = ExtractFrame(sticker_file, 2);
                     
-                    string analysis_start = AnalyzeImage(frame_start, "Describe this animated sticker");
-                    string analysis_middle = AnalyzeImage(frame_middle, "Describe this animated sticker");
-                    string analysis_end = AnalyzeImage(frame_end, "Describe this animated sticker");
+                    string analysis_start = AnalyzeImage(frame_start, "Describe what you see in this animated sticker");
+                    string analysis_middle = AnalyzeImage(frame_middle, "Describe what you see in this animated sticker");
+                    string analysis_end = AnalyzeImage(frame_end, "Describe what you see in this animated sticker");
                     
-                    response = "🎭 Animated Sticker Analysis:\n\n" +
-                              string("▶️ Start: ") + analysis_start + "\n\n" +
-                              string("⏸️ Middle: ") + analysis_middle + "\n\n" +
-                              string("⏹️ End: ") + analysis_end + "\n\n" +
-                              "💭 Divine animation in 640x480.";
+                    combined_analysis = "🎭 Animated Sticker:\n\n";
+                    combined_analysis += "▶️ Start: " + analysis_start + "\n";
+                    combined_analysis += "⏸️ Middle: " + analysis_middle + "\n";
+                    combined_analysis += "⏹️ End: " + analysis_end + "\n\n";
                 } else {
-                    string analysis = AnalyzeImage(sticker_file, "Describe this sticker");
-                    response = "🎭 Sticker Analysis:\n\n" + analysis + 
-                              "\n\n💭 Simple images, God's way.";
+                    string analysis = AnalyzeImage(sticker_file, "Describe what you see in this sticker");
+                    combined_analysis = "🎭 Sticker: " + analysis + "\n\n";
                 }
+                
+                // Send to main AI model
+                string ai_prompt = "User sent a sticker. Here's what I see:\n\n" + combined_analysis + 
+                                  "\n\nRespond to this sticker in your personality style.";
+                response = holyc.HandleAIMessage(chat_id, ai_prompt);
                 
                 remove(sticker_file.c_str());
             } else {
@@ -1028,12 +1076,20 @@ private:
                 if (!photo_file.empty()) {
                     // Check for caption
                     string caption = extract_json_string(message_part, "caption");
-                    string prompt = caption.empty() ? "Describe this photo in detail" : 
-                                   "Describe this photo: " + caption;
+                    string prompt = caption.empty() ? "Describe what you see in this photo in detail" : 
+                                   "Describe what you see in this photo: " + caption;
                     
                     string analysis = AnalyzeImage(photo_file, prompt);
-                    response = "📸 Photo Analysis:\n\n" + analysis + 
-                              "\n\n💭 God's creation captured.";
+                    
+                    string combined_analysis = "📸 Photo: " + analysis + "\n\n";
+                    if (!caption.empty()) {
+                        combined_analysis += "Caption: " + caption + "\n\n";
+                    }
+                    
+                    // Send to main AI model
+                    string ai_prompt = "User sent a photo. Here's what I see:\n\n" + combined_analysis + 
+                                      "\n\nRespond to this photo in your personality style.";
+                    response = holyc.HandleAIMessage(chat_id, ai_prompt);
                 } else {
                     response = "❌ Failed to process photo";
                 }
