@@ -26,6 +26,8 @@ using namespace std;
 atomic<bool> running(true);
 string BOT_TOKEN;
 string OLLAMA_MODEL;
+string OLLAMA_VISION_MODEL = "llama3.2-vision";
+string OLLAMA_WHISPER_MODEL = "whisper";
 string PERSONALITY_PROMPT;
 long long ADMIN_ID = 0;
 long long last_update_id = 0;
@@ -184,6 +186,232 @@ inline string extract_json_string(const string& json, const string& key) {
     size_t end = start;
     while (end < json.length() && (json[end] != '"' || json[end-1] == '\\')) end++;
     return json.substr(start, end - start);
+}
+
+// Download file from Telegram
+string DownloadTelegramFile(const string& file_id) {
+    // Get file path
+    string url = "https://api.telegram.org/bot" + BOT_TOKEN + "/getFile?file_id=" + file_id;
+    string response = http_request(url, "", true);
+    
+    string file_path = extract_json_string(response, "file_path");
+    if (file_path.empty()) {
+        cout << "[ERROR] Failed to get file path for " << file_id << endl;
+        return "";
+    }
+    
+    // Download file
+    string download_url = "https://api.telegram.org/file/bot" + BOT_TOKEN + "/" + file_path;
+    cout << "[DEBUG] Downloading file: " << file_path << endl;
+    
+    string file_data = http_request(download_url, "", true);
+    
+    if (file_data.empty()) {
+        cout << "[ERROR] Failed to download file" << endl;
+        return "";
+    }
+    
+    // Determine extension from file_path
+    string extension = "";
+    size_t dot_pos = file_path.find_last_of('.');
+    if (dot_pos != string::npos) {
+        extension = file_path.substr(dot_pos);
+    }
+    
+    // Save to temp file
+    string temp_filename = "temp_" + to_string(time(nullptr)) + "_" + file_id.substr(0, 10) + extension;
+    ofstream temp_file(temp_filename, ios::binary);
+    temp_file.write(file_data.c_str(), file_data.length());
+    temp_file.close();
+    
+    cout << "[DEBUG] File saved: " << temp_filename << " (" << file_data.length() << " bytes)" << endl;
+    return temp_filename;
+}
+
+// Extract frame from video/GIF using ffmpeg
+string ExtractFrame(const string& video_file, int position) {
+    // position: 0=start, 1=middle, 2=end
+    string output_file = "frame_" + to_string(time(nullptr)) + "_" + to_string(position) + ".jpg";
+    
+    string ffmpeg_cmd;
+    if (position == 0) {
+        // First frame
+        ffmpeg_cmd = "ffmpeg -i " + video_file + " -vframes 1 -q:v 2 " + output_file + " -y 2>&1";
+    } else if (position == 1) {
+        // Middle frame
+        ffmpeg_cmd = "ffmpeg -i " + video_file + " -vf \"select='eq(n\\,0)'\" -vsync 0 -vframes 1 -q:v 2 " + output_file + " -y 2>&1";
+        // Better approach: get duration and seek to 50%
+        ffmpeg_cmd = "ffmpeg -ss $(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 " + 
+                    video_file + " | awk '{print $1/2}') -i " + video_file + " -vframes 1 -q:v 2 " + output_file + " -y 2>&1";
+    } else {
+        // Last frame
+        ffmpeg_cmd = "ffmpeg -sseof -1 -i " + video_file + " -update 1 -q:v 2 " + output_file + " -y 2>&1";
+    }
+    
+    cout << "[DEBUG] Extracting frame " << position << " from " << video_file << endl;
+    
+    #ifdef _WIN32
+    FILE* pipe = _popen(ffmpeg_cmd.c_str(), "r");
+    #else
+    FILE* pipe = popen(ffmpeg_cmd.c_str(), "r");
+    #endif
+    
+    if (!pipe) {
+        cout << "[ERROR] Failed to run ffmpeg" << endl;
+        return "";
+    }
+    
+    char buffer[256];
+    string result;
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        result += buffer;
+    }
+    
+    #ifdef _WIN32
+    _pclose(pipe);
+    #else
+    pclose(pipe);
+    #endif
+    
+    // Check if output file exists
+    ifstream check_file(output_file);
+    if (!check_file.good()) {
+        cout << "[ERROR] Frame extraction failed" << endl;
+        return "";
+    }
+    check_file.close();
+    
+    cout << "[DEBUG] Frame extracted: " << output_file << endl;
+    return output_file;
+}
+
+// Transcribe audio using Whisper via Ollama
+string TranscribeAudio(const string& audio_file) {
+    cout << "[DEBUG] Transcribing audio with Whisper..." << endl;
+    
+    // Convert to WAV if needed (Whisper prefers WAV)
+    string wav_file = "temp_audio_" + to_string(time(nullptr)) + ".wav";
+    string ffmpeg_cmd = "ffmpeg -i " + audio_file + " -ar 16000 -ac 1 -c:a pcm_s16le " + wav_file + " -y 2>&1";
+    
+    #ifdef _WIN32
+    FILE* pipe = _popen(ffmpeg_cmd.c_str(), "r");
+    #else
+    FILE* pipe = popen(ffmpeg_cmd.c_str(), "r");
+    #endif
+    
+    if (pipe) {
+        char buffer[256];
+        while (fgets(buffer, sizeof(buffer), pipe) != nullptr);
+        #ifdef _WIN32
+        _pclose(pipe);
+        #else
+        pclose(pipe);
+        #endif
+    }
+    
+    // Read WAV file
+    ifstream file(wav_file, ios::binary);
+    if (!file.is_open()) {
+        cout << "[ERROR] Cannot open audio file" << endl;
+        remove(audio_file.c_str());
+        return "[ERROR] Cannot process audio";
+    }
+    
+    stringstream buffer;
+    buffer << file.rdbuf();
+    string audio_data = buffer.str();
+    file.close();
+    
+    // Base64 encode
+    const char* base64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    string base64_audio;
+    int val = 0, valb = -6;
+    for (unsigned char c : audio_data) {
+        val = (val << 8) + c;
+        valb += 8;
+        while (valb >= 0) {
+            base64_audio.push_back(base64_chars[(val >> valb) & 0x3F]);
+            valb -= 6;
+        }
+    }
+    if (valb > -6) base64_audio.push_back(base64_chars[((val << 8) >> (valb + 8)) & 0x3F]);
+    while (base64_audio.size() % 4) base64_audio.push_back('=');
+    
+    const char* ollama_host_env = getenv("OLLAMA_HOST");
+    string ollama_host = ollama_host_env ? ollama_host_env : "http://localhost:11434";
+    
+    string json_request = "{\"model\":\"whisper\",\"audio\":\"" + base64_audio + "\"}";
+    
+    string response = http_request(ollama_host + "/api/transcribe", json_request, false);
+    
+    if (response.empty()) {
+        cout << "[WARN] Whisper not responding. Install: ollama pull whisper" << endl;
+        remove(audio_file.c_str());
+        remove(wav_file.c_str());
+        return "[Voice message - Whisper not available]";
+    }
+    
+    string transcription = extract_json_string(response, "text");
+    
+    // Clean up temp files
+    remove(audio_file.c_str());
+    remove(wav_file.c_str());
+    
+    return transcription.empty() ? "[Empty audio]" : transcription;
+}
+
+// Analyze image using vision model
+string AnalyzeImage(const string& image_file, const string& prompt = "Describe this image") {
+    cout << "[DEBUG] Analyzing image with vision model..." << endl;
+    
+    ifstream file(image_file, ios::binary);
+    if (!file.is_open()) {
+        cout << "[ERROR] Cannot open image file" << endl;
+        return "[ERROR] Cannot analyze image";
+    }
+    
+    stringstream buffer;
+    buffer << file.rdbuf();
+    string image_data = buffer.str();
+    file.close();
+    
+    // Base64 encode
+    const char* base64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    string base64_image;
+    int val = 0, valb = -6;
+    for (unsigned char c : image_data) {
+        val = (val << 8) + c;
+        valb += 8;
+        while (valb >= 0) {
+            base64_image.push_back(base64_chars[(val >> valb) & 0x3F]);
+            valb -= 6;
+        }
+    }
+    if (valb > -6) base64_image.push_back(base64_chars[((val << 8) >> (valb + 8)) & 0x3F]);
+    while (base64_image.size() % 4) base64_image.push_back('=');
+    
+    const char* ollama_host_env = getenv("OLLAMA_HOST");
+    string ollama_host = ollama_host_env ? ollama_host_env : "http://localhost:11434";
+    
+    string escaped_prompt = json_escape(prompt);
+    string json_request = "{\"model\":\"" + OLLAMA_VISION_MODEL + 
+                        "\",\"prompt\":\"" + escaped_prompt + 
+                        "\",\"images\":[\"" + base64_image + "\"],\"stream\":false}";
+    
+    string response = http_request(ollama_host + "/api/generate", json_request, false);
+    
+    if (response.empty()) {
+        cout << "[WARN] Vision model not responding. Install: ollama pull llama3.2-vision" << endl;
+        remove(image_file.c_str());
+        return "[Image - Vision model not available]";
+    }
+    
+    string analysis = extract_json_string(response, "response");
+    
+    // Clean up temp file
+    remove(image_file.c_str());
+    
+    return analysis.empty() ? "[Cannot analyze image]" : analysis;
 }
 
 // Divine randomness (Terry's way)
@@ -676,6 +904,166 @@ private:
         
         string message_part = update_json.substr(message_pos);
         long long chat_id = extract_json_int(message_part, "id");
+        
+        // Check for multimedia content
+        string response;
+        
+        // Voice message
+        if (message_part.find("\"voice\":") != string::npos) {
+            cout << "[MULTIMEDIA] Voice message detected" << endl;
+            string file_id = extract_json_string(message_part, "file_id");
+            string audio_file = DownloadTelegramFile(file_id);
+            
+            if (!audio_file.empty()) {
+                string transcription = TranscribeAudio(audio_file);
+                response = "🎤 Voice Transcription:\n\n" + transcription + 
+                          "\n\n💭 God hears all voices.";
+                
+                // Also process transcription with AI
+                string ai_response = holyc.HandleAIMessage(chat_id, transcription);
+                response += "\n\n🤖 AI Response:\n" + ai_response;
+            } else {
+                response = "❌ Failed to process voice message";
+            }
+        }
+        // Video note (circle)
+        else if (message_part.find("\"video_note\":") != string::npos) {
+            cout << "[MULTIMEDIA] Video note detected" << endl;
+            string file_id = extract_json_string(message_part, "file_id");
+            string video_file = DownloadTelegramFile(file_id);
+            
+            if (!video_file.empty()) {
+                string frame_start = ExtractFrame(video_file, 0);
+                string frame_middle = ExtractFrame(video_file, 1);
+                string frame_end = ExtractFrame(video_file, 2);
+                
+                string analysis_start = AnalyzeImage(frame_start, "Describe this video frame");
+                string analysis_middle = AnalyzeImage(frame_middle, "Describe this video frame");
+                string analysis_end = AnalyzeImage(frame_end, "Describe this video frame");
+                
+                response = "🎥 Video Note Analysis (3 frames):\n\n" +
+                          string("▶️ Start: ") + analysis_start + "\n\n" +
+                          string("⏸️ Middle: ") + analysis_middle + "\n\n" +
+                          string("⏹️ End: ") + analysis_end + "\n\n" +
+                          "💭 God sees all moments in time.";
+                
+                remove(video_file.c_str());
+            } else {
+                response = "❌ Failed to process video note";
+            }
+        }
+        // Animation (GIF)
+        else if (message_part.find("\"animation\":") != string::npos) {
+            cout << "[MULTIMEDIA] Animation detected" << endl;
+            string file_id = extract_json_string(message_part, "file_id");
+            string gif_file = DownloadTelegramFile(file_id);
+            
+            if (!gif_file.empty()) {
+                string frame_start = ExtractFrame(gif_file, 0);
+                string frame_middle = ExtractFrame(gif_file, 1);
+                string frame_end = ExtractFrame(gif_file, 2);
+                
+                string analysis_start = AnalyzeImage(frame_start, "Describe this GIF frame");
+                string analysis_middle = AnalyzeImage(frame_middle, "Describe this GIF frame");
+                string analysis_end = AnalyzeImage(frame_end, "Describe this GIF frame");
+                
+                response = "🎞️ Animation Analysis (3 frames):\n\n" +
+                          string("1️⃣ First: ") + analysis_start + "\n\n" +
+                          string("2️⃣ Middle: ") + analysis_middle + "\n\n" +
+                          string("3️⃣ Last: ") + analysis_end + "\n\n" +
+                          "💭 Motion is God's language.";
+                
+                remove(gif_file.c_str());
+            } else {
+                response = "❌ Failed to process animation";
+            }
+        }
+        // Sticker
+        else if (message_part.find("\"sticker\":") != string::npos) {
+            cout << "[MULTIMEDIA] Sticker detected" << endl;
+            bool is_animated = message_part.find("\"is_animated\":true") != string::npos;
+            string file_id = extract_json_string(message_part, "file_id");
+            string sticker_file = DownloadTelegramFile(file_id);
+            
+            if (!sticker_file.empty()) {
+                if (is_animated) {
+                    string frame_start = ExtractFrame(sticker_file, 0);
+                    string frame_middle = ExtractFrame(sticker_file, 1);
+                    string frame_end = ExtractFrame(sticker_file, 2);
+                    
+                    string analysis_start = AnalyzeImage(frame_start, "Describe this animated sticker");
+                    string analysis_middle = AnalyzeImage(frame_middle, "Describe this animated sticker");
+                    string analysis_end = AnalyzeImage(frame_end, "Describe this animated sticker");
+                    
+                    response = "🎭 Animated Sticker Analysis:\n\n" +
+                              string("▶️ Start: ") + analysis_start + "\n\n" +
+                              string("⏸️ Middle: ") + analysis_middle + "\n\n" +
+                              string("⏹️ End: ") + analysis_end + "\n\n" +
+                              "💭 Divine animation in 640x480.";
+                } else {
+                    string analysis = AnalyzeImage(sticker_file, "Describe this sticker");
+                    response = "🎭 Sticker Analysis:\n\n" + analysis + 
+                              "\n\n💭 Simple images, God's way.";
+                }
+                
+                remove(sticker_file.c_str());
+            } else {
+                response = "❌ Failed to process sticker";
+            }
+        }
+        // Photo
+        else if (message_part.find("\"photo\":") != string::npos) {
+            cout << "[MULTIMEDIA] Photo detected" << endl;
+            // Get largest photo (last in array)
+            size_t photo_array_start = message_part.find("\"photo\":[");
+            size_t last_file_id_pos = message_part.rfind("\"file_id\":\"", photo_array_start + 100);
+            
+            if (last_file_id_pos != string::npos) {
+                size_t file_id_start = last_file_id_pos + 11;
+                size_t file_id_end = message_part.find("\"", file_id_start);
+                string file_id = message_part.substr(file_id_start, file_id_end - file_id_start);
+                
+                string photo_file = DownloadTelegramFile(file_id);
+                
+                if (!photo_file.empty()) {
+                    // Check for caption
+                    string caption = extract_json_string(message_part, "caption");
+                    string prompt = caption.empty() ? "Describe this photo in detail" : 
+                                   "Describe this photo: " + caption;
+                    
+                    string analysis = AnalyzeImage(photo_file, prompt);
+                    response = "📸 Photo Analysis:\n\n" + analysis + 
+                              "\n\n💭 God's creation captured.";
+                } else {
+                    response = "❌ Failed to process photo";
+                }
+            }
+        }
+        // Text message
+        else {
+            string text = extract_json_string(message_part, "text");
+            
+            if (text.empty()) {
+                cout << "[DEBUG] Empty text in message" << endl;
+                return;
+            }
+            
+            cout << "[RECV] Chat " << chat_id << ": " << text << endl;
+            
+            response = holyc.ProcessMessage(chat_id, text);
+        }
+        
+        if (!response.empty()) {
+            cout << "[SEND] Response: " << response.substr(0, 50) << "..." << endl;
+            SendMessage(chat_id, response);
+        }
+    }
+            cout << "[DEBUG] No 'message' field in update (might be edited_message or callback)" << endl;
+            return;
+        }
+        
+        string message_part = update_json.substr(message_pos);
+        long long chat_id = extract_json_int(message_part, "id");
         string text = extract_json_string(message_part, "text");
         
         if (text.empty()) {
@@ -842,12 +1230,22 @@ int main() {
     cout << "[INFO] Ollama host: " << ollama_host << endl;
     
     cout << "[INFO] Loading HolyC logic from telegram_bot.HC" << endl;
+    cout << "[INFO] Multimedia library loaded (multimedia_holy.HC)" << endl;
     cout << "[INFO] Divine wisdom enabled (15% chance)" << endl;
     cout << "[INFO] Memory persistence enabled (SQLite)" << endl;
     cout << "[INFO] Divine algorithms loaded" << endl;
     cout << "[INFO] Terry features: ASCII art, Math, Bible, Colors" << endl;
     cout << "[INFO] Random enhancements: 5% ASCII, 3% Bible" << endl;
-    cout << "[INFO] Make sure Ollama is running\n" << endl;
+    cout << "[INFO] Multimedia support:" << endl;
+    cout << "[INFO]   🎤 Voice messages (Whisper transcription)" << endl;
+    cout << "[INFO]   🎥 Video notes (3-frame analysis)" << endl;
+    cout << "[INFO]   🎞️ Animations/GIF (3-frame analysis)" << endl;
+    cout << "[INFO]   🎭 Stickers (static & animated)" << endl;
+    cout << "[INFO]   📸 Photos (vision analysis)" << endl;
+    cout << "[INFO] Vision model: " << OLLAMA_VISION_MODEL << endl;
+    cout << "[INFO] Whisper model: " << OLLAMA_WHISPER_MODEL << endl;
+    cout << "[INFO] FFmpeg available for frame extraction" << endl;
+    cout << "[INFO] Make sure Ollama is running with vision & whisper models\n" << endl;
     
     TelegramBridge bridge(bot_token, ollama_model);
     

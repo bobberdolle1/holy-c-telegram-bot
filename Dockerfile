@@ -10,6 +10,8 @@ RUN apt-get update && apt-get install -y \
     sqlite3 \
     libsqlite3-dev \
     libcurl4-openssl-dev \
+    ffmpeg \
+    ffprobe \
     wget \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
