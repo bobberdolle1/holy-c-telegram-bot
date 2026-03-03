@@ -614,7 +614,7 @@ class HolyCBotLogic:
         else:
             return "Error: Ollama not responding. Make sure Ollama is running."
     
-    def ProcessMessage(self, chat_id: int, text: str, user_id: int = 0) -> str:
+    def ProcessMessage(self, chat_id: int, text: str, user_id: int = 0, username: str = "") -> str:
         """HolyC ProcessMessage implementation"""
         logger.info(f"[HolyC] ProcessMessage({chat_id}, {text})")
         
@@ -661,11 +661,43 @@ class HolyCBotLogic:
                 return self.HandleMemoryCommand(chat_id, "load")
             elif mem_args == "clear":
                 return self.HandleMemoryCommand(chat_id, "clear")
-        else:
-            return self.HandleAIMessage(chat_id, text, user_id)
-
-
+        elif text == "/grow":
+            return f"🍆 DIVINE GROWTH GAME 🍆\n\nGrew by {random.randint(1,30)} cm!\n\nCurrent size: {random.randint(50,200)} cm\nYou rank #{random.randint(1,100)} in the leaderboard.\n\nNext attempt in 24 h.\n\n💭 Randomness is God's voice."
+        elif text == "/growtop":
+            return "🏆 DIVINE GROWTH LEADERBOARD 🏆\n\n1 | Player1 — 250 cm\n2 | Player2 — 200 cm\n3 | Player3 — 180 cm\n\n💭 Size doesn't matter, God's will does!"
 class TelegramBridge:
+    """Bridge between Telegram API and HolyC logic"""
+    
+    def __init__(self, bot_token: str, ollama_model: str):
+        self.bot_token = bot_token
+        self.holyc = HolyCBotLogic(ollama_model)
+        logger.info("[Bridge] Initialized")
+    
+    async def setup_commands(self, application):
+        """Register bot commands with Telegram"""
+        from telegram import BotCommand
+        
+        commands = [
+            BotCommand("start", "Initialize divine connection"),
+            BotCommand("help", "Show help"),
+            BotCommand("commands", "Full command list"),
+            BotCommand("grow", "Divine growth game"),
+            BotCommand("growtop", "Growth leaderboard"),
+            BotCommand("dice", "Roll dice"),
+            BotCommand("coin", "Flip coin"),
+            BotCommand("quote", "Terry's wisdom"),
+            BotCommand("joke", "Programming joke"),
+            BotCommand("calc", "Calculator"),
+            BotCommand("prime", "Check prime"),
+            BotCommand("hash", "Hash text"),
+            BotCommand("oracle", "Ask oracle"),
+            BotCommand("ascii", "ASCII art"),
+            BotCommand("terry", "About Terry"),
+            BotCommand("info", "Bot info"),
+        ]
+        
+        await application.bot.set_my_commands(commands)
+        logger.info("[Bridge] Commands registered with Telegram")
     """Bridge between Telegram API and HolyC logic"""
     
     def __init__(self, bot_token: str, ollama_model: str):
@@ -680,25 +712,29 @@ class TelegramBridge:
         username = update.effective_user.username or update.effective_user.first_name or f"User{user_id}"
         text = update.message.text
         chat_type = update.effective_chat.type
+    def run(self):
+        """Start the bridge"""
+        logger.info("[Bridge] Starting Telegram bot...")
         
-        # Group/supergroup logic
-        if chat_type in ['group', 'supergroup']:
-            bot_username = (await context.bot.get_me()).username
-            
-            # Check if bot is mentioned or message is a reply to bot
-            is_mentioned = f"@{bot_username}" in text
-            is_reply_to_bot = (
-                update.message.reply_to_message and 
-                update.message.reply_to_message.from_user.id == context.bot.id
-            )
-            
-            # Ignore if not mentioned and not a reply to bot (unless it's a command)
-            if not is_mentioned and not is_reply_to_bot and not text.startswith('/'):
-                return
-            
-            # Remove mention from text
-            if is_mentioned:
-                text = text.replace(f"@{bot_username}", "").strip()
+        application = Application.builder().token(self.bot_token).build()
+        
+        # Register commands with Telegram
+        import asyncio
+        asyncio.get_event_loop().run_until_complete(self.setup_commands(application))
+        
+        # Route all messages to HolyC logic
+        application.add_handler(
+            MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message)
+        )
+        application.add_handler(
+            MessageHandler(filters.COMMAND, self.handle_message)
+        )
+        
+        logger.info("[Bridge] Bot is running!")
+        print("\n[SUCCESS] HolyC Telegram Bot is running!")
+        print("Open Telegram and send /start to your bot\n")
+        
+        application.run_polling(allowed_updates=Update.ALL_TYPES)()
         
         logger.info(f"[Bridge] Received from {chat_type}: {text}")
         
