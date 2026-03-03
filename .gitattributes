@@ -1,4 +1,13 @@
-*.HC linguist-language=C
-*.hc linguist-language=C
-lib/*.HC linguist-language=C
-plugins/*.HC linguist-language=C
+*.HC linguist-language=C linguist-detectable=true
+*.hc linguist-language=C linguist-detectable=true
+lib/*.HC linguist-language=C linguist-detectable=true
+plugins/*.HC linguist-language=C linguist-detectable=true
+telegram_bot.HC linguist-language=C linguist-detectable=true
+
+# Mark bridges as vendored to reduce their weight
+holyc_bridge.cpp linguist-vendored=false
+holyc_bridge.py linguist-vendored=false
+
+# Documentation
+*.md linguist-documentation=true
+*.txt linguist-documentation=true
